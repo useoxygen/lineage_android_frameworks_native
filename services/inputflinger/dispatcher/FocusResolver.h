@@ -51,6 +51,10 @@ class FocusResolver {
 public:
     // Returns the focused window token on the specified display.
     sp<IBinder> getFocusedWindowToken(ui::LogicalDisplayId displayId) const;
+    // Whether 'token' is the focused window of a display other than 'displayId'. A window that
+    // moves from one display to another in a single window update can be focused on its new display
+    // before the old display drops it.
+    bool isFocusedOnAnotherDisplay(const sp<IBinder>& token, ui::LogicalDisplayId displayId) const;
 
     struct FocusChanges {
         sp<IBinder> oldFocus;

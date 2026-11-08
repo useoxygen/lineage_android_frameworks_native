@@ -7277,7 +7277,19 @@ void InputDispatcher::onFocusChangedLocked(
         CancellationOptions options(CancellationOptions::Mode::CANCEL_NON_POINTER_EVENTS,
                                    "focus left window", resolvedWindow, traceTracker);
         synthesizeCancellationEventsForWindowLocked(options);
-        enqueueFocusEventLocked(changes.oldFocus, /*hasFocus=*/false, changes.reason);
+        // A window that moved to another display in this window update may already have been
+        // given focus there: displays are processed in id order, so a move to a lower display id
+        // (for example a task moved from a virtual display to the default display) grants focus on
+        // the new display before the old display drops it. Focus events carry no display, and the
+        // app keeps a single focus state, so telling it that it lost focus now would leave it
+        // unfocused while the dispatcher routes keys to it (keys are then dropped and the IME is
+        // refused). Its focus is not lost, so send nothing.
+        if (mFocusResolver.isFocusedOnAnotherDisplay(changes.oldFocus, changes.displayId)) {
+            LOG_IF(INFO, DEBUG_FOCUS) << "Not sending focus loss on display " << changes.displayId
+                                      << ": the window is focused on another display";
+        } else {
+            enqueueFocusEventLocked(changes.oldFocus, /*hasFocus=*/false, changes.reason);
+        }
     }
     if (changes.newFocus) {
         resetNoFocusedWindowTimeoutLocked();

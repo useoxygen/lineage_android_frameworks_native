@@ -9977,6 +9977,73 @@ TEST_F(InputDispatcherFocusOnTwoDisplaysTest, CanFocusWindowOnUnfocusedDisplay) 
 }
 
 /**
+ * A focused window moves from the secondary display to the primary display in a single window
+ * update, with a focus request for it on the primary display. Displays are processed in id order, so
+ * the primary display grants it focus before the secondary display drops it. The window must end up
+ * focused: it gets focus once and is never told it lost focus, and keys reach it.
+ */
+TEST_F(InputDispatcherFocusOnTwoDisplaysTest, FocusedWindowMovedToLowerDisplayKeepsFocus) {
+    // The window manager asks for focus on the primary display before the window is there.
+    FocusRequest request;
+    request.token = windowInSecondary->getToken();
+    request.windowName = windowInSecondary->getName();
+    request.timestamp = systemTime(SYSTEM_TIME_MONOTONIC);
+    request.displayId = ui::LogicalDisplayId::DEFAULT.val();
+    mDispatcher->setFocusedWindow(request);
+    windowInPrimary->consumeFocusEvent(false);
+
+    // One update moves the window to the primary display and removes it from the secondary one.
+    windowInSecondary->editInfo()->displayId = ui::LogicalDisplayId::DEFAULT;
+    mDispatcher->onWindowInfosChanged(
+            {{*windowInSecondary->getInfo(), *windowInPrimary->getInfo()}, {}, 0, 0});
+    windowInSecondary->consumeFocusEvent(true);
+    windowInSecondary->assertNoEvents();
+    windowInPrimary->assertNoEvents();
+
+    ASSERT_EQ(InputEventInjectionResult::SUCCEEDED,
+              injectKeyDownNoRepeat(*mDispatcher, ui::LogicalDisplayId::DEFAULT));
+    windowInSecondary->consumeKeyDown(ui::LogicalDisplayId::DEFAULT);
+    windowInPrimary->assertNoEvents();
+}
+
+/**
+ * The reverse move: a focused window moves from the primary display to the secondary display. The
+ * primary display drops it before the secondary display grants it focus, so it is told it lost focus
+ * and then that it has focus again, and ends up focused.
+ */
+TEST_F(InputDispatcherFocusOnTwoDisplaysTest, FocusedWindowMovedToHigherDisplayKeepsFocus) {
+    FocusRequest request;
+    request.token = windowInPrimary->getToken();
+    request.windowName = windowInPrimary->getName();
+    request.timestamp = systemTime(SYSTEM_TIME_MONOTONIC);
+    request.displayId = SECOND_DISPLAY_ID.val();
+    mDispatcher->setFocusedWindow(request);
+    windowInSecondary->consumeFocusEvent(false);
+
+    windowInPrimary->editInfo()->displayId = SECOND_DISPLAY_ID;
+    mDispatcher->onWindowInfosChanged(
+            {{*windowInPrimary->getInfo(), *windowInSecondary->getInfo()}, {}, 0, 0});
+    windowInPrimary->consumeFocusEvent(false);
+    windowInPrimary->consumeFocusEvent(true);
+    windowInPrimary->assertNoEvents();
+
+    ASSERT_EQ(InputEventInjectionResult::SUCCEEDED,
+              injectKeyDownNoRepeat(*mDispatcher, SECOND_DISPLAY_ID));
+    windowInPrimary->consumeKeyDown(SECOND_DISPLAY_ID);
+    windowInSecondary->assertNoEvents();
+}
+
+/**
+ * A focused window that leaves its display without being focused anywhere else still loses focus.
+ */
+TEST_F(InputDispatcherFocusOnTwoDisplaysTest, FocusedWindowRemovedFromDisplayLosesFocus) {
+    mDispatcher->onWindowInfosChanged({{*windowInPrimary->getInfo()}, {}, 0, 0});
+    windowInSecondary->consumeFocusEvent(false);
+    windowInSecondary->assertNoEvents();
+    windowInPrimary->assertNoEvents();
+}
+
+/**
  * Send a key to the primary display and to the secondary display.
  * Then cause the key on the primary display to be canceled by sending in a stale key.
  * Ensure that the key on the primary display is canceled, and that the key on the secondary display
