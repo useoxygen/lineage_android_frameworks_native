@@ -50,6 +50,19 @@ sp<IBinder> FocusResolver::getFocusedWindowToken(ui::LogicalDisplayId displayId)
     return it != mFocusedWindowTokenByDisplay.end() ? it->second.second : nullptr;
 }
 
+bool FocusResolver::isFocusedOnAnotherDisplay(const sp<IBinder>& token,
+                                              ui::LogicalDisplayId displayId) const {
+    if (token == nullptr) {
+        return false;
+    }
+    for (const auto& [focusedDisplayId, namedToken] : mFocusedWindowTokenByDisplay) {
+        if (focusedDisplayId != displayId && namedToken.second == token) {
+            return true;
+        }
+    }
+    return false;
+}
+
 std::optional<FocusRequest> FocusResolver::getFocusRequest(ui::LogicalDisplayId displayId) {
     auto it = mFocusRequestByDisplay.find(displayId);
     return it != mFocusRequestByDisplay.end() ? std::make_optional<>(it->second) : std::nullopt;

@@ -7960,9 +7960,9 @@ TEST_F(InputDispatcherTest, TransferTouchOnDisplay_CloneSurface) {
 /**
  * When a focused window is moved from one display to another, it should either maintain focus,
  * or it should lose it and then gain it again.
- * This test reproduces a bug in the dispatcher - currently, even though dispatcher still thinks
- * that the window has focus after it's been moved, the last event that's written to the window's
- * input channel is focusEvent(hasFocus=false).
+ * This test used to reproduce a bug in the dispatcher (b/438569310): even though the dispatcher
+ * still thought that the window had focus after it was moved, the last event written to the
+ * window's input channel was focusEvent(hasFocus=false). The window must now keep its focus.
  */
 TEST_F(InputDispatcherTest, Focus_WindowMovedToAnotherDisplay_LosesFocus) {
     static constexpr auto DEFAULT = ui::LogicalDisplayId::DEFAULT;
@@ -8015,9 +8015,8 @@ TEST_F(InputDispatcherTest, Focus_WindowMovedToAnotherDisplay_LosesFocus) {
     // Window gains focus on the new display.
     ASSERT_NO_FATAL_FAILURE(window->consumeFocusEvent(true));
 
-    // TODO(b/438569310)
-    // BUG: the last event that is written to the window is FocusEvent(hasFocus=false)
-    ASSERT_NO_FATAL_FAILURE(window->consumeFocusEvent(false));
+    // The old display doesn't tell the window that it lost focus: it is focused on the new display.
+    window->assertNoEvents();
 
     // The key is still delivered to the window correctly.
     mDispatcher->notifyKey(KeyArgsBuilder(AKEY_EVENT_ACTION_DOWN, AINPUT_SOURCE_KEYBOARD)
@@ -9974,6 +9973,131 @@ TEST_F(InputDispatcherFocusOnTwoDisplaysTest, CanFocusWindowOnUnfocusedDisplay) 
     windowInPrimary->assertNoEvents();
     windowInSecondary->assertNoEvents();
     secondWindowInPrimary->consumeKeyDown(ui::LogicalDisplayId::DEFAULT);
+}
+
+/**
+ * A focused window moves from the secondary display to the primary display in a single window
+ * update, with a focus request for it on the primary display. Displays are processed in id order, so
+ * the primary display grants it focus before the secondary display drops it. The window must end up
+ * focused: it gets focus once and is never told it lost focus, and keys reach it.
+ */
+TEST_F(InputDispatcherFocusOnTwoDisplaysTest, FocusedWindowMovedToLowerDisplayKeepsFocus) {
+    // The window manager asks for focus on the primary display before the window is there.
+    FocusRequest request;
+    request.token = windowInSecondary->getToken();
+    request.windowName = windowInSecondary->getName();
+    request.timestamp = systemTime(SYSTEM_TIME_MONOTONIC);
+    request.displayId = ui::LogicalDisplayId::DEFAULT.val();
+    mDispatcher->setFocusedWindow(request);
+    windowInPrimary->consumeFocusEvent(false);
+
+    // One update moves the window to the primary display and removes it from the secondary one.
+    windowInSecondary->editInfo()->displayId = ui::LogicalDisplayId::DEFAULT;
+    mDispatcher->onWindowInfosChanged(
+            {{*windowInSecondary->getInfo(), *windowInPrimary->getInfo()}, {}, 0, 0});
+    windowInSecondary->consumeFocusEvent(true);
+    windowInSecondary->assertNoEvents();
+    windowInPrimary->assertNoEvents();
+
+    ASSERT_EQ(InputEventInjectionResult::SUCCEEDED,
+              injectKeyDownNoRepeat(*mDispatcher, ui::LogicalDisplayId::DEFAULT));
+    windowInSecondary->consumeKeyDown(ui::LogicalDisplayId::DEFAULT);
+    windowInPrimary->assertNoEvents();
+}
+
+/**
+ * The reverse move: a focused window moves from the primary display to the secondary display. The
+ * primary display drops it before the secondary display grants it focus, so it is told it lost focus
+ * and then that it has focus again, and ends up focused.
+ */
+TEST_F(InputDispatcherFocusOnTwoDisplaysTest, FocusedWindowMovedToHigherDisplayKeepsFocus) {
+    FocusRequest request;
+    request.token = windowInPrimary->getToken();
+    request.windowName = windowInPrimary->getName();
+    request.timestamp = systemTime(SYSTEM_TIME_MONOTONIC);
+    request.displayId = SECOND_DISPLAY_ID.val();
+    mDispatcher->setFocusedWindow(request);
+    windowInSecondary->consumeFocusEvent(false);
+
+    windowInPrimary->editInfo()->displayId = SECOND_DISPLAY_ID;
+    mDispatcher->onWindowInfosChanged(
+            {{*windowInPrimary->getInfo(), *windowInSecondary->getInfo()}, {}, 0, 0});
+    windowInPrimary->consumeFocusEvent(false);
+    windowInPrimary->consumeFocusEvent(true);
+    windowInPrimary->assertNoEvents();
+
+    ASSERT_EQ(InputEventInjectionResult::SUCCEEDED,
+              injectKeyDownNoRepeat(*mDispatcher, SECOND_DISPLAY_ID));
+    windowInPrimary->consumeKeyDown(SECOND_DISPLAY_ID);
+    windowInSecondary->assertNoEvents();
+}
+
+/**
+ * A focused window that leaves its display without being focused anywhere else still loses focus.
+ */
+TEST_F(InputDispatcherFocusOnTwoDisplaysTest, FocusedWindowRemovedFromDisplayLosesFocus) {
+    mDispatcher->onWindowInfosChanged({{*windowInPrimary->getInfo()}, {}, 0, 0});
+    windowInSecondary->consumeFocusEvent(false);
+    windowInSecondary->assertNoEvents();
+    windowInPrimary->assertNoEvents();
+}
+
+/**
+ * One window token is focused on both displays: a mirror of the primary display's focused window is
+ * focused on the secondary display. Removing the window from the primary display must not tell the
+ * app it lost focus, because it is still focused on the secondary display. Removing the mirror from
+ * the secondary display as well then sends exactly one focus loss.
+ */
+TEST_F(InputDispatcherFocusOnTwoDisplaysTest, WindowFocusedOnTwoDisplaysRemovedFromPrimaryFirst) {
+    sp<FakeWindowHandle> mirrorInSecondary = windowInPrimary->clone(SECOND_DISPLAY_ID);
+    mDispatcher->onWindowInfosChanged({{*windowInPrimary->getInfo(), *mirrorInSecondary->getInfo(),
+                                        *windowInSecondary->getInfo()},
+                                       {},
+                                       0,
+                                       0});
+    setFocusedWindow(mirrorInSecondary);
+    windowInSecondary->consumeFocusEvent(false);
+    windowInPrimary->consumeFocusEvent(true);
+    windowInPrimary->assertNoEvents();
+
+    // The window leaves the primary display, but is still focused on the secondary display.
+    mDispatcher->onWindowInfosChanged(
+            {{*mirrorInSecondary->getInfo(), *windowInSecondary->getInfo()}, {}, 0, 0});
+    windowInPrimary->assertNoEvents();
+
+    // It leaves the secondary display too, and is no longer focused anywhere.
+    mDispatcher->onWindowInfosChanged({{*windowInSecondary->getInfo()}, {}, 0, 0});
+    windowInPrimary->consumeFocusEvent(false);
+    windowInPrimary->assertNoEvents();
+    windowInSecondary->assertNoEvents();
+}
+
+/**
+ * The same as above in the other order: the mirror leaves the secondary display first, then the
+ * window leaves the primary display.
+ */
+TEST_F(InputDispatcherFocusOnTwoDisplaysTest, WindowFocusedOnTwoDisplaysRemovedFromSecondaryFirst) {
+    sp<FakeWindowHandle> mirrorInSecondary = windowInPrimary->clone(SECOND_DISPLAY_ID);
+    mDispatcher->onWindowInfosChanged({{*windowInPrimary->getInfo(), *mirrorInSecondary->getInfo(),
+                                        *windowInSecondary->getInfo()},
+                                       {},
+                                       0,
+                                       0});
+    setFocusedWindow(mirrorInSecondary);
+    windowInSecondary->consumeFocusEvent(false);
+    windowInPrimary->consumeFocusEvent(true);
+    windowInPrimary->assertNoEvents();
+
+    // The mirror leaves the secondary display, but the window is still focused on the primary one.
+    mDispatcher->onWindowInfosChanged(
+            {{*windowInPrimary->getInfo(), *windowInSecondary->getInfo()}, {}, 0, 0});
+    windowInPrimary->assertNoEvents();
+
+    // It leaves the primary display too, and is no longer focused anywhere.
+    mDispatcher->onWindowInfosChanged({{*windowInSecondary->getInfo()}, {}, 0, 0});
+    windowInPrimary->consumeFocusEvent(false);
+    windowInPrimary->assertNoEvents();
+    windowInSecondary->assertNoEvents();
 }
 
 /**
