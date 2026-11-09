@@ -10044,6 +10044,64 @@ TEST_F(InputDispatcherFocusOnTwoDisplaysTest, FocusedWindowRemovedFromDisplayLos
 }
 
 /**
+ * One window token is focused on both displays: a mirror of the primary display's focused window is
+ * focused on the secondary display. Removing the window from the primary display must not tell the
+ * app it lost focus, because it is still focused on the secondary display. Removing the mirror from
+ * the secondary display as well then sends exactly one focus loss.
+ */
+TEST_F(InputDispatcherFocusOnTwoDisplaysTest, WindowFocusedOnTwoDisplaysRemovedFromPrimaryFirst) {
+    sp<FakeWindowHandle> mirrorInSecondary = windowInPrimary->clone(SECOND_DISPLAY_ID);
+    mDispatcher->onWindowInfosChanged({{*windowInPrimary->getInfo(), *mirrorInSecondary->getInfo(),
+                                        *windowInSecondary->getInfo()},
+                                       {},
+                                       0,
+                                       0});
+    setFocusedWindow(mirrorInSecondary);
+    windowInSecondary->consumeFocusEvent(false);
+    windowInPrimary->consumeFocusEvent(true);
+    windowInPrimary->assertNoEvents();
+
+    // The window leaves the primary display, but is still focused on the secondary display.
+    mDispatcher->onWindowInfosChanged(
+            {{*mirrorInSecondary->getInfo(), *windowInSecondary->getInfo()}, {}, 0, 0});
+    windowInPrimary->assertNoEvents();
+
+    // It leaves the secondary display too, and is no longer focused anywhere.
+    mDispatcher->onWindowInfosChanged({{*windowInSecondary->getInfo()}, {}, 0, 0});
+    windowInPrimary->consumeFocusEvent(false);
+    windowInPrimary->assertNoEvents();
+    windowInSecondary->assertNoEvents();
+}
+
+/**
+ * The same as above in the other order: the mirror leaves the secondary display first, then the
+ * window leaves the primary display.
+ */
+TEST_F(InputDispatcherFocusOnTwoDisplaysTest, WindowFocusedOnTwoDisplaysRemovedFromSecondaryFirst) {
+    sp<FakeWindowHandle> mirrorInSecondary = windowInPrimary->clone(SECOND_DISPLAY_ID);
+    mDispatcher->onWindowInfosChanged({{*windowInPrimary->getInfo(), *mirrorInSecondary->getInfo(),
+                                        *windowInSecondary->getInfo()},
+                                       {},
+                                       0,
+                                       0});
+    setFocusedWindow(mirrorInSecondary);
+    windowInSecondary->consumeFocusEvent(false);
+    windowInPrimary->consumeFocusEvent(true);
+    windowInPrimary->assertNoEvents();
+
+    // The mirror leaves the secondary display, but the window is still focused on the primary one.
+    mDispatcher->onWindowInfosChanged(
+            {{*windowInPrimary->getInfo(), *windowInSecondary->getInfo()}, {}, 0, 0});
+    windowInPrimary->assertNoEvents();
+
+    // It leaves the primary display too, and is no longer focused anywhere.
+    mDispatcher->onWindowInfosChanged({{*windowInSecondary->getInfo()}, {}, 0, 0});
+    windowInPrimary->consumeFocusEvent(false);
+    windowInPrimary->assertNoEvents();
+    windowInSecondary->assertNoEvents();
+}
+
+/**
  * Send a key to the primary display and to the secondary display.
  * Then cause the key on the primary display to be canceled by sending in a stale key.
  * Ensure that the key on the primary display is canceled, and that the key on the secondary display
