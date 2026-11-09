@@ -7960,9 +7960,9 @@ TEST_F(InputDispatcherTest, TransferTouchOnDisplay_CloneSurface) {
 /**
  * When a focused window is moved from one display to another, it should either maintain focus,
  * or it should lose it and then gain it again.
- * This test reproduces a bug in the dispatcher - currently, even though dispatcher still thinks
- * that the window has focus after it's been moved, the last event that's written to the window's
- * input channel is focusEvent(hasFocus=false).
+ * This test used to reproduce a bug in the dispatcher (b/438569310): even though the dispatcher
+ * still thought that the window had focus after it was moved, the last event written to the
+ * window's input channel was focusEvent(hasFocus=false). The window must now keep its focus.
  */
 TEST_F(InputDispatcherTest, Focus_WindowMovedToAnotherDisplay_LosesFocus) {
     static constexpr auto DEFAULT = ui::LogicalDisplayId::DEFAULT;
@@ -8015,9 +8015,8 @@ TEST_F(InputDispatcherTest, Focus_WindowMovedToAnotherDisplay_LosesFocus) {
     // Window gains focus on the new display.
     ASSERT_NO_FATAL_FAILURE(window->consumeFocusEvent(true));
 
-    // TODO(b/438569310)
-    // BUG: the last event that is written to the window is FocusEvent(hasFocus=false)
-    ASSERT_NO_FATAL_FAILURE(window->consumeFocusEvent(false));
+    // The old display doesn't tell the window that it lost focus: it is focused on the new display.
+    window->assertNoEvents();
 
     // The key is still delivered to the window correctly.
     mDispatcher->notifyKey(KeyArgsBuilder(AKEY_EVENT_ACTION_DOWN, AINPUT_SOURCE_KEYBOARD)
