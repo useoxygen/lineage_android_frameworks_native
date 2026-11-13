@@ -635,6 +635,21 @@ void SurfaceFlinger::run() {
     mScheduler->run();
 }
 
+// Cyclon (CYC-2007): on a userdebug or eng image, screenshots taken by ADB's shell or root include
+// secure layers, and virtual displays they create are secure, so screencap, screenrecord and scrcpy
+// show FLAG_SECURE windows instead of black. Apps keep Android's rules and user images are unchanged.
+// setprop persist.cyclon.debug.secure_capture 0 turns it off; DisplayManagerService applies the
+// same rule to the virtual displays it creates for shell or root.
+static bool isDebugSecureCaptureCaller() {
+    const uid_t uid = IPCThreadState::self()->getCallingUid();
+    if (uid != AID_SHELL && uid != AID_ROOT) return false;
+    static const bool debugImage = [] {
+        const std::string type = base::GetProperty("ro.build.type", "user");
+        return type == "userdebug" || type == "eng";
+    }();
+    return debugImage && base::GetBoolProperty("persist.cyclon.debug.secure_capture", true);
+}
+
 sp<IBinder> SurfaceFlinger::createVirtualDisplay(
         const std::string& displayName, bool isSecure,
         gui::ISurfaceComposer::OptimizationPolicy optimizationPolicy, const std::string& uniqueId,
@@ -645,7 +660,11 @@ sp<IBinder> SurfaceFlinger::createVirtualDisplay(
     // This is to ensure that only root, system, and graphics can request to create a secure
     // display. Secure displays can show secure content so we add an additional restriction on it.
     const uid_t uid = IPCThreadState::self()->getCallingUid();
-    if (isSecure && uid != AID_ROOT && uid != AID_GRAPHICS && uid != AID_SYSTEM) {
+    if (isDebugSecureCaptureCaller()) {
+        isSecure = true;
+    }
+    if (isSecure && uid != AID_ROOT && uid != AID_GRAPHICS && uid != AID_SYSTEM &&
+        !isDebugSecureCaptureCaller()) {
         ALOGE("Only privileged processes can create a secure display");
         return nullptr;
     }
@@ -8279,7 +8298,8 @@ void SurfaceFlinger::captureDisplay(const DisplayCaptureArgs& args,
                            .dataspace = static_cast<ui::Dataspace>(captureArgs.dataspace),
                            .disableBlur = false,
                            .isGrayscale = captureArgs.grayscale,
-                           .isSecure = captureArgs.secureLayerMode == SecureLayerMode::Capture,
+                           .isSecure = captureArgs.secureLayerMode == SecureLayerMode::Capture ||
+                                   isDebugSecureCaptureCaller(),
                            .includeProtected =
                                    captureArgs.protectedLayerMode == ProtectedLayerMode::Capture,
                            .preserveDisplayColors = captureArgs.preserveDisplayColors,
@@ -8306,7 +8326,8 @@ void SurfaceFlinger::captureDisplay(DisplayId displayId, const CaptureArgs& args
                                   .frameScaleY = args.frameScaleY,
                                   .disableBlur = false,
                                   .isGrayscale = false,
-                                  .isSecure = args.secureLayerMode == SecureLayerMode::Capture,
+                                  .isSecure = args.secureLayerMode == SecureLayerMode::Capture ||
+                                          isDebugSecureCaptureCaller(),
                                   .includeProtected = false,
                                   .preserveDisplayColors = args.preserveDisplayColors,
                                   .requireDpuReadback =
@@ -8373,7 +8394,8 @@ void SurfaceFlinger::captureLayers(const LayerCaptureArgs& args,
                            .frameScaleY = captureArgs.frameScaleY,
                            .disableBlur = false,
                            .isGrayscale = captureArgs.grayscale,
-                           .isSecure = captureArgs.secureLayerMode == SecureLayerMode::Capture,
+                           .isSecure = captureArgs.secureLayerMode == SecureLayerMode::Capture ||
+                                   isDebugSecureCaptureCaller(),
                            .includeProtected =
                                    captureArgs.protectedLayerMode == ProtectedLayerMode::Capture,
                            .preserveDisplayColors = captureArgs.preserveDisplayColors,
